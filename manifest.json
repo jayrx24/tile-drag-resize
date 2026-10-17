@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.jayrx24.tile-drag-resize",
+  "name": "Tile Drag & Resize",
+  "version": "1.0.0",
+  "author": "jayson",
+  "license": "MIT",
+  "description": "Resize tiled windows by dragging the gaps between them, and move any window by holding the middle mouse button.",
+  "repository": "https://github.com/jayrx24/tile-drag-resize",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Tile Drag & Resize",
+    "description": "Toggle middle-button window dragging",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
