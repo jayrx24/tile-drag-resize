@@ -842,14 +842,16 @@ Item {
         function preview(): void { root.previewMove() }
         function dispatchstatus(): string { return root.dispatchDiagnostic() }
         // Drive the resize path without a mouse, which is the only way to check
-        // it here:
-        //   omarchy shell tile-drag-resize resizeby address:0x1234 40 0
-        //   omarchy shell tile-drag-resize noanim address:0x1234 1
+        // it here. The rails pass a bare address; this accepts the `address:`
+        // form too, since that is how Hyprland spells it everywhere else:
+        //   omarchy shell tile-drag-resize resizeby 0x1234 40 0
+        //   omarchy shell tile-drag-resize noanim 0x1234 1
         function resizeby(address: string, dx: int, dy: int): void {
-            root.resizeWindow(address, dx, dy);
+            root.resizeWindow(String(address).replace(/^address:/, ""), dx, dy);
         }
         function noanim(address: string, on: int): void {
-            if (on) root.beginResize(address);
+            var addr = String(address).replace(/^address:/, "");
+            if (on) root.beginResize(addr);
             else root.endResize();
         }
         function dragstatus(): string {

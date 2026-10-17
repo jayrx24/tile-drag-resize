@@ -141,8 +141,8 @@ omarchy shell tile-drag-resize reapply   # re-assert border settings and the bin
 omarchy shell tile-drag-resize preview   # pin the move border on for 8s (visual check)
 omarchy shell tile-drag-resize dragstatus # what the move detector currently sees
 omarchy shell tile-drag-resize snapshot  # every window rectangle the detector tracks
-omarchy shell tile-drag-resize resizeby address:0x1234 40 0  # resize that window (checks the dispatch path)
-omarchy shell tile-drag-resize noanim address:0x1234 1       # raise/drop no_anim on that window
+omarchy shell tile-drag-resize resizeby 0x1234 40 0  # resize that window (checks the dispatch path)
+omarchy shell tile-drag-resize noanim 0x1234 1       # raise/drop no_anim on that window
 omarchy shell tile-drag-resize dispatchstatus # queue and socket state of the resize path
 ```
 
