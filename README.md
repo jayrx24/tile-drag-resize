@@ -64,7 +64,7 @@ per-frame colour work.
 feature. The icon shows a mouse (`󰍽`) when on and a crossed-out mouse (`󰍾`)
 when off.
 
-While you drag a window, a three-pixel lightbar border appears around it and
+While you drag a window, a six-pixel lightbar border appears around it and
 flows around the perimeter in the same colours as the gap bars.
 
 Hyprland emits no drag begin/end event and the shell cannot see the mouse button,
@@ -97,6 +97,10 @@ Nothing runs while idle: the pointer feed and the fast geometry poll only start
 once a drag is suspected (or a focus event suggests one is coming) and stop again
 when it ends. While a window is moving, the gap bars are left alone so they do
 not flicker along with the shifting layout.
+
+The border is `thickness` pixels wide — 6, set in `GapOverlay.qml` next to the
+colour ramp — and it is drawn inside the window's edges, so a thicker border
+covers more of the window.
 
 The service turns off Hyprland's own border resizing (`general:resize_on_border`
 and `general:hover_icon_on_border`) at runtime so the gap overlay owns the

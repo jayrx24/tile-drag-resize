@@ -335,7 +335,7 @@ PanelWindow {
         visible: opacity > 0.01
         Behavior on opacity { NumberAnimation { duration: 110 } }
 
-        readonly property real thickness: 3
+        readonly property real thickness: 6
         // Corner fractions: the top/bottom edges own `fx`, the sides own `fy`.
         readonly property real perimeter: Math.max(1, 2 * width + 2 * height)
         readonly property real fx: width / perimeter
