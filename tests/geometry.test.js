@@ -249,4 +249,68 @@ test("toArray never mistakes a function-valued `values` for a list", () => {
   assert.strictEqual(G.toArray({ values: [1, 2] }).length, 2);
 });
 
+// --- pointer tracking ------------------------------------------------------
+
+const hist = [
+  { t: 1000, x: 0, y: 0 },
+  { t: 1010, x: 10, y: 20 },
+  { t: 1020, x: 30, y: 20 }
+];
+
+test("cursorAt interpolates between the samples that bracket a time", () => {
+  const mid = G.cursorAt(hist, 1005);
+  assert.strictEqual(mid.x, 5);
+  assert.strictEqual(mid.y, 10);
+  const late = G.cursorAt(hist, 1015);
+  assert.strictEqual(late.x, 20);
+  assert.strictEqual(late.y, 20);
+});
+
+test("cursorAt returns the sample itself on an exact hit", () => {
+  assert.strictEqual(G.cursorAt(hist, 1010).x, 10);
+  assert.strictEqual(G.cursorAt(hist, 1020).x, 30);
+});
+
+test("cursorAt clamps outside the history instead of extrapolating", () => {
+  const early = G.cursorAt(hist, 500);
+  assert.strictEqual(early.x, 0);
+  const late = G.cursorAt(hist, 9999);
+  assert.strictEqual(late.x, 30);
+});
+
+test("cursorAt copes with an empty history and a single sample", () => {
+  assert.strictEqual(G.cursorAt([], 100), null);
+  assert.strictEqual(G.cursorAt(null, 100), null);
+  const one = G.cursorAt([{ t: 5, x: 1, y: 2 }], 500);
+  assert.strictEqual(one.x, 1);
+});
+
+test("trimCursorHistory drops old samples but always keeps one", () => {
+  const kept = G.trimCursorHistory(hist, 1015, 8);
+  assert.deepStrictEqual(kept.map((s) => s.t), [1010, 1020]);
+  const all = G.trimCursorHistory([{ t: 1, x: 0, y: 0 }], 99999, 10);
+  assert.strictEqual(all.length, 1);
+  assert.strictEqual(G.trimCursorHistory([], 10, 10).length, 0);
+});
+
+test("trimCursorHistory does not mutate the history it is given", () => {
+  const copy = hist.slice();
+  G.trimCursorHistory(copy, 1015, 8);
+  assert.deepStrictEqual(copy.map((s) => s.t), [1000, 1010, 1020]);
+});
+
+test("lockError is zero while the window rides with the pointer", () => {
+  const err = G.lockError({ x: 100, y: 50 }, { x: 140, y: 60 }, 40, 10);
+  assert.strictEqual(err.x, 0);
+  assert.strictEqual(err.y, 0);
+});
+
+test("lockError grows when a release leaves the window behind", () => {
+  // Pointer moved 220px right after the button came up: the window stayed.
+  const err = G.lockError({ x: 100, y: 50 }, { x: 360, y: 60 }, 40, 10);
+  assert.strictEqual(err.x, -220);
+  assert.strictEqual(err.y, 0);
+  assert.strictEqual(G.lockError(null, { x: 1, y: 1 }, 0, 0), null);
+});
+
 console.log("\n" + passed + " checks passed" + (process.exitCode ? " (with failures)" : ""));

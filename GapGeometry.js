@@ -338,6 +338,64 @@ function detectMove(prev, next, epsilon) {
   return best;
 }
 
+// ---- pointer tracking maths ----------------------------------------------
+
+// Pointer position at time `t`, taken from a history of { t, x, y } samples
+// (oldest first, as the shell keeps them), interpolating between the two
+// samples that bracket `t`.
+//
+// The pointer feed and the geometry it is compared against arrive on separate
+// schedules, so a sample is only comparable with a window rectangle if it is
+// read at the same instant. Interpolation is what makes that possible, and the
+// error it leaves behind is second order: over an 8-10 ms gap the pointer has
+// barely changed acceleration, so the straight line between two samples is
+// within a pixel or two of the truth.
+//
+// Times before the first sample clamp to it and times after the last sample
+// clamp to the last: a comparison is better done with a stale sample than not
+// at all, and the shell drops samples that are too old to trust. Returns null
+// for an empty history.
+function cursorAt(hist, t) {
+  if (!hist || hist.length === 0) return null;
+  var first = hist[0];
+  if (!isNumber(t) || t <= first.t) return first;
+
+  for (var i = hist.length - 1; i >= 0; i--) {
+    var a = hist[i];
+    if (a.t <= t) {
+      var b = hist[i + 1];
+      if (!b || b.t <= a.t) return a;
+      var f = (t - a.t) / (b.t - a.t);
+      return { t: t, x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+    }
+  }
+  return first;
+}
+
+// Drop history older than `keepMs` before `t`, keeping at least one sample.
+// Returns a new array, so this stays free of side effects.
+function trimCursorHistory(hist, t, keepMs) {
+  if (!hist || hist.length === 0) return [];
+  var cutoff = (Number(t) || 0) - (Math.max(0, Number(keepMs) || 0));
+  var start = 0;
+  while (start < hist.length - 1 && hist[start].t < cutoff) start++;
+  return hist.slice(start);
+}
+
+// How far a window sits from where the pointer implies it should be, given the
+// offset between the two taken when the drag was picked up. While the button is
+// held the window rides with the pointer, so this stays near zero; a release
+// leaves the window behind and the error grows with the pointer's travel.
+//
+// Returns { x, y } in pixels, or null when there is nothing to compare.
+function lockError(rect, cursor, grabX, grabY) {
+  if (!rect || !cursor) return null;
+  return {
+    x: (Number(rect.x) || 0) - ((Number(cursor.x) || 0) - (Number(grabX) || 0)),
+    y: (Number(rect.y) || 0) - ((Number(cursor.y) || 0) - (Number(grabY) || 0))
+  };
+}
+
 // ---- public entry point ---------------------------------------------------
 
 // Compute the draggable gap rails for one monitor's active workspace.
@@ -392,7 +450,10 @@ var api = {
   findRails: findRails,
   mergeSeam: mergeSeam,
   mergeRails: mergeRails,
-  detectMove: detectMove
+  detectMove: detectMove,
+  cursorAt: cursorAt,
+  trimCursorHistory: trimCursorHistory,
+  lockError: lockError
 };
 
 if (typeof module !== "undefined" && module.exports) {

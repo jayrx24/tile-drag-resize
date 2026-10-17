@@ -65,16 +65,38 @@ feature. The icon shows a mouse (`󰍽`) when on and a crossed-out mouse (`󰍾`
 when off.
 
 While you drag a window, a three-pixel lightbar border appears around it and
-flows around the perimeter in the same colours as the gap bars. Hyprland emits
-no drag begin/end event and the shell cannot see the mouse button, so the drag
-is inferred from geometry: a window that changes position while keeping its size
-has been dragged. Two samples in a row are needed, which keeps ordinary layout
-changes (one sample) and gap resizes (a size change) from lighting anything up.
-The border is polled every 16 ms while it is moving and kept for 600 ms after
-the motion stops, so a pause mid-drag does not make it flicker. `movePollMs`,
-`moveGraceMs`, and `moveConfirmSamples` in `Service.qml` tune that. While a
-window is moving, the gap bars are left alone so they do not flicker along with
-the shifting layout.
+flows around the perimeter in the same colours as the gap bars.
+
+Hyprland emits no drag begin/end event and the shell cannot see the mouse button,
+so the drag is *detected* from geometry: a window that changes position while
+keeping its size has been dragged. Two samples in a row are needed, which keeps
+ordinary layout changes (one sample) and gap resizes (a size change) from
+lighting anything up (`movePollMs`, `moveConfirmSamples`).
+
+Geometry is a poor *tracker*, though — a geometry sample is only as fresh as the
+request that produced it, which leaves the border visibly trailing the window.
+The pointer is exact: Hyprland drags a window by keeping the grabbed point under
+the cursor, so for the whole drag the window's origin is `pointer - grab`. The
+pointer is read over Hyprland's request socket (the only way to get it — there is
+no cursor API and no pointer events) and, once the grab offset is known, the
+border is driven straight from it, near display rates, so it sits on the window
+instead of chasing it.
+
+The same lock is what ends the drag. There is no release event either, so the
+window has to stay where the pointer says for as long as the button is held: the
+pointer may wander, but the window has to come with it. A window that stops
+following has been released (or dropped and re-tiled). A pause therefore does
+*not* end the drag — the window resting is perfectly consistent with a held
+button — and the border disappears as soon as the pointer next moves without the
+window. If the pointer feed is ever unavailable, the border falls back to the
+geometry-only behaviour (poll, hold for `moveGraceMs` after the motion stops).
+`moveLockTol`, `moveLockMisses`, `cursorPollMs`, and `moveFeedMs` in
+`Service.qml` tune all of that; `moveMaxMs` is a hard stop so nothing can stick.
+
+Nothing runs while idle: the pointer feed and the fast geometry poll only start
+once a drag is suspected (or a focus event suggests one is coming) and stop again
+when it ends. While a window is moving, the gap bars are left alone so they do
+not flicker along with the shifting layout.
 
 The service turns off Hyprland's own border resizing (`general:resize_on_border`
 and `general:hover_icon_on_border`) at runtime so the gap overlay owns the
@@ -100,11 +122,14 @@ omarchy shell tile-drag-resize snapshot  # every window rectangle the detector t
 ```
 
 `preview` outlines one window for eight seconds without dragging anything, which
-is the quickest way to check the border's styling. `dragstatus` prints the
-inferred drag (`moving=`, `active=`, `streak=`, `tracked=`, `samples=`,
-`rect=`) and is the first thing to reach for if the border does not appear while
-dragging; `snapshot` dumps the rectangles it is comparing, which shows whether
-the window is being seen at all.
+is the quickest way to check the border's styling. `dragstatus` prints what the
+detector sees (`moving=`, `active=`, `streak=`, `locked=`, `miss=`, `grab=`,
+`gap=`/`lag=` for how old the pointer sample was, `res=` for how far the window
+sat from where the pointer put it, `resmax=` for the worst that got during a
+healthy drag, `feed=` whether the pointer feed is running, `why=` why the last
+drag ended, `rect=`) and is the first thing to reach for if the border does not
+appear while dragging; `snapshot` dumps the rectangles it is comparing, which
+shows whether the window is being seen at all.
 
 State lives at `$XDG_STATE_HOME/tile-drag-resize/enabled` (`~/.local/state` by
 default).
@@ -124,7 +149,7 @@ o.bind("SUPER + CTRL + M", "Toggle Tile Drag & Resize", "omarchy shell tile-drag
 | `manifest.json` | Plugin id, kinds (`service`, `bar-widget`), entry points. |
 | `Service.qml` | Owns both features: gap geometry refresh, overlay construction, resize dispatch, middle-drag state, bind management, IPC. |
 | `GapOverlay.qml` | One transparent layer-shell surface per monitor; only gap corridors take input. Also draws the drag border. |
-| `GapGeometry.js` | Pure geometry that turns tiled-window rectangles into draggable gap rails, plus the pure-translation test that recognises a drag. Unit-tested under Node. |
+| `GapGeometry.js` | Pure geometry that turns tiled-window rectangles into draggable gap rails, plus the pure-translation test that recognises a drag and the pointer-tracking maths (time-aligned sample lookup, lock error). Unit-tested under Node. |
 | `BarWidget.qml` | The bar icon and its click behaviour. |
 | `Panel.qml` | The options dropdown. |
 
@@ -134,11 +159,26 @@ o.bind("SUPER + CTRL + M", "Toggle Tile Drag & Resize", "omarchy shell tile-drag
 node tests/geometry.test.js
 ```
 
-22 assertions cover window extraction (including the floating-window exception
+30 assertions cover window extraction (including the floating-window exception
 the drag border needs), seam detection, full-height merging, resize targeting,
 move detection (a drag is a position change with no size change; layout shifts,
-resizes, and sub-pixel jitter are all rejected), monitor-local conversion, and
-the QML window-list shapes the shell actually hands the module.
+resizes, and sub-pixel jitter are all rejected), the pointer-tracking maths
+(time-aligned interpolation, history trimming, the lock error a release leaves
+behind), monitor-local conversion, and the QML window-list shapes the shell
+actually hands the module.
+
+The middle-drag path also has a live end-to-end test:
+
+```bash
+tests/drag-live.sh
+```
+
+It opens its own throwaway window (via `foot`), drags it the way a real drag
+moves — pointer and window together — and then checks the four things that
+matter: the border lights up and locks to the pointer, it survives a pause
+*without* the pointer moving, it drops as soon as the pointer moves and the
+window does not, and nothing keeps polling afterwards. It takes over the pointer
+for a few seconds and needs a running Hyprland session.
 
 Two live diagnostics are included as well:
 
