@@ -841,16 +841,16 @@ Item {
         function reapply(): void { root.reapply() }
         function preview(): void { root.previewMove() }
         function dispatchstatus(): string { return root.dispatchDiagnostic() }
-        // Drive the resize path without a mouse, path for checking it:
-        //   omarchy shell tile-drag-resize resizeby 40 0
-        //   omarchy shell tile-drag-resize noanim 1
-        function resizeby(dx: int, dy: int): void {
-            var r = GapGeometry.windowRect(Hyprland.activeToplevel, { allowFloating: true });
-            if (r) root.resizeWindow(r.address, dx, dy);
+        // Drive the resize path without a mouse, which is the only way to check
+        // it here:
+        //   omarchy shell tile-drag-resize resizeby address:0x1234 40 0
+        //   omarchy shell tile-drag-resize noanim address:0x1234 1
+        function resizeby(address: string, dx: int, dy: int): void {
+            root.resizeWindow(address, dx, dy);
         }
-        function noanim(on: int): void {
-            var r = GapGeometry.windowRect(Hyprland.activeToplevel, { allowFloating: true });
-            if (on) { if (r) root.beginResize(r.address); } else root.endResize();
+        function noanim(address: string, on: int): void {
+            if (on) root.beginResize(address);
+            else root.endResize();
         }
         function dragstatus(): string {
             return "moving=" + (root.moveAddress || "-")
