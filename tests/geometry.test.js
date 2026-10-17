@@ -60,7 +60,6 @@ test("side-by-side pair yields one vertical rail", () => {
   assert.strictEqual(r.orientation, "vertical");
   assert.deepStrictEqual([r.x, r.y, r.w, r.h], [100, 0, 6, 100]);
   assert.strictEqual(r.resizeAddress, "0xa");
-  assert.strictEqual(r.resizeFactor, 1);
 });
 
 test("stacked pair yields one horizontal rail", () => {
@@ -70,7 +69,6 @@ test("stacked pair yields one horizontal rail", () => {
   assert.strictEqual(r.orientation, "horizontal");
   assert.deepStrictEqual([r.x, r.y, r.w, r.h], [0, 100, 100, 6]);
   assert.strictEqual(r.resizeAddress, "0xa");
-  assert.strictEqual(r.resizeFactor, 1);
 });
 
 test("gap larger than maxGap produces no rail", () => {
@@ -103,14 +101,13 @@ test("tall window beside a column merges into one full-height rail", () => {
   assert.strictEqual(vertical.length, 1, "expected exactly one merged vertical rail");
   assert.deepStrictEqual([vertical[0].x, vertical[0].y, vertical[0].w, vertical[0].h], [100, 0, 6, 1000]);
   assert.strictEqual(vertical[0].resizeAddress, "0xL");
-  assert.strictEqual(vertical[0].resizeFactor, 1);
 
   // The two horizontal seams between the stacked windows remain.
   const horizontal = rails.filter((r) => r.orientation === "horizontal");
   assert.strictEqual(horizontal.length, 2);
 });
 
-test("column beside a tall window merges and resizes the shared window with factor -1", () => {
+test("column beside a tall window merges and resizes the shared tall window", () => {
   const toplevels = [
     win("0x1", 0, 0, 100, 330),
     win("0x2", 0, 336, 100, 330),
@@ -121,8 +118,23 @@ test("column beside a tall window merges and resizes the shared window with fact
   const vertical = rails.filter((r) => r.orientation === "vertical");
   assert.strictEqual(vertical.length, 1);
   assert.deepStrictEqual([vertical[0].x, vertical[0].y, vertical[0].w, vertical[0].h], [100, 0, 6, 1000]);
+  // The column does not share a single window, so the seam is driven by the
+  // one window every piece of it touches: the tall right-hand window.
   assert.strictEqual(vertical[0].resizeAddress, "0xR");
-  assert.strictEqual(vertical[0].resizeFactor, -1);
+});
+
+test("rails carry no resize factor (the seam follows the delta for either neighbour)", () => {
+  // Hyprland moves the resized window's split-facing edge by the requested
+  // amount, so a shared left/top window and a shared right/bottom window both
+  // travel the same way. A per-window factor would invert one of them.
+  const left = G.collect(0, 0, [win("0xL", 0, 0, 100, 1000), win("0x1", 106, 0, 100, 500), win("0x2", 106, 506, 100, 494)], OPTS);
+  const right = G.collect(0, 0, [win("0x1", 0, 0, 100, 500), win("0x2", 0, 506, 100, 494), win("0xR", 106, 0, 100, 1000)], OPTS);
+  const lv = left.filter((r) => r.orientation === "vertical")[0];
+  const rv = right.filter((r) => r.orientation === "vertical")[0];
+  assert.strictEqual(lv.resizeAddress, "0xL");
+  assert.strictEqual(rv.resizeAddress, "0xR");
+  assert.strictEqual(lv.resizeFactor, undefined);
+  assert.strictEqual(rv.resizeFactor, undefined);
 });
 
 test("different seams on the same x do not merge without a shared window", () => {

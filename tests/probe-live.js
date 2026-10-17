@@ -30,7 +30,7 @@ for (const mon of monitors) {
   for (const r of rails) {
     console.log(
       `    rail ${r.orientation.padEnd(10)} x=${r.x} y=${r.y} w=${r.w} h=${r.h} ` +
-        `-> resize ${r.resizeAddress} *${r.resizeFactor}`
+        `-> resize ${r.resizeAddress}`
     );
   }
 }

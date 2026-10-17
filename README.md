@@ -6,8 +6,9 @@ An Omarchy shell plugin that combines two mouse-first window controls into a
 single unit:
 
 - **Gap resize** — move the pointer into the real gap between two tiled
-  windows. A theme-coloured bidirectional rail appears only over that gap;
-  drag with the left mouse button to resize the adjacent tiles.
+  windows. A lightbar appears only over that gap; drag with the left mouse
+  button to resize the adjacent tiles. The bar rides along with the seam as you
+  drag, and cycles through a slow colour ramp while it is lit.
 - **Middle-drag** — hold the middle mouse button over any window to move it,
   the same way `Super` + left-drag does, without touching the keyboard. A bar
   icon toggles it on and off.
@@ -47,9 +48,14 @@ omarchy bar move io.github.jayrx24.tile-drag-resize --section right
 ## Usage
 
 **Gap resize.** Open two or more tiled windows and move the pointer into the
-space between adjacent windows. When the rail and the resize cursor appear,
-drag with the left mouse button. Floating, fullscreen, hidden, and pinned
+space between adjacent windows. When the lightbar and the resize cursor appear,
+drag with the left mouse button. The lightbar tracks the seam while you drag, so
+it stays on the edge it is moving. Floating, fullscreen, hidden, and pinned
 windows are ignored.
+
+The bar's colour ramp is derived from the theme accent and drifts through the
+hue wheel over about sixteen seconds; it only animates while a bar is on
+screen, so an idle shell does no per-frame colour work.
 
 **Middle-drag.** Click the bar icon once, or right-click it, to toggle the
 feature. The icon shows a mouse (`󰍽`) when on and a crossed-out mouse (`󰍾`)
@@ -103,8 +109,8 @@ o.bind("SUPER + CTRL + M", "Toggle Tile Drag & Resize", "omarchy shell tile-drag
 node tests/geometry.test.js
 ```
 
-17 assertions cover window extraction, seam detection, full-height merging,
-resize direction, monitor-local conversion, and the QML window-list shapes the
+18 assertions cover window extraction, seam detection, full-height merging,
+resize targeting, monitor-local conversion, and the QML window-list shapes the
 shell actually hands the module.
 
 ## License

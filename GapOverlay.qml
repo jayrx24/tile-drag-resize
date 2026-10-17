@@ -3,8 +3,9 @@
 // The surface covers the whole output but its input mask is only the measured
 // gap corridors, so everywhere else it stays click-through and never steals a
 // click from the windows below. Moving the pointer into a real gap reveals a
-// theme-accent rail with a bidirectional resize cursor; dragging it resizes
-// the adjacent tiles through the service.
+// lightbar with a bidirectional resize cursor; dragging it resizes the
+// adjacent tiles through the service, and the lightbar rides along with the
+// seam so the highlight tracks the pointer instead of staying behind.
 
 import QtQuick
 import Quickshell
@@ -22,12 +23,42 @@ PanelWindow {
     property var service: null
 
     readonly property var monitor: Hyprland.monitorFor(modelData)
-    readonly property color railColor: Color.accent
 
     // Current rails (monitor-local rectangles) and their last fingerprint.
     property var rails: []
     property string railsKey: ""
     property var liveRegions: []
+
+    // ---- lightbar colour state --------------------------------------------
+    //
+    // Every lit rail shares one drifting hue so the whole bar cycles colours
+    // together instead of each rail picking its own phase. `litRails` gates the
+    // animation: an idle shell does no per-frame colour work.
+    property real huePhase: 0
+    property int litRails: 0
+
+    NumberAnimation {
+        target: overlay
+        property: "huePhase"
+        from: 0
+        to: 1
+        duration: 16000
+        loops: Animation.Infinite
+        running: overlay.litRails > 0
+    }
+
+    // A point on the lightbar's colour ramp: `along` runs 0..1 from one end of
+    // the bar to the other and `alpha` is baked in. The ramp starts at the
+    // theme accent, drifts with the shared phase, and spreads a little across
+    // the length so the bar is not a flat slab of one colour.
+    function lightColor(along, alpha) {
+        var base = Color.accent;
+        var hue = base.hslHue + overlay.huePhase + along * 0.12;
+        hue = hue - Math.floor(hue);
+        var sat = Math.max(0.5, Math.min(1.0, base.hslSaturation));
+        var lit = Math.max(0.55, Math.min(0.78, base.hslLightness + 0.05));
+        return Qt.hsla(hue, sat, lit, alpha === undefined ? 1 : alpha);
+    }
 
     screen: modelData
     color: "transparent"
@@ -60,8 +91,10 @@ PanelWindow {
         return false;
     }
 
-    // Recompute rails for this monitor, skipping while a drag is in progress
-    // (geometry churns during the resize and would make the rail jump).
+    // Recompute rails for this monitor, skipping while a drag is in progress.
+    // The geometry churns continuously during a resize and the delegate is
+    // already tracking the seam visually, so re-deriving mid-drag would only
+    // make the lightbar stutter.
     function refreshRails() {
         if (anyDragging()) return;
         var next = service ? service.railsFor(monitor) : [];
@@ -117,7 +150,7 @@ PanelWindow {
         Qt.callLater(rebuildMask);
     }
 
-    // One delegate per rail: a thin highlight plus a drag handle.
+    // One delegate per rail: a lightbar plus a drag handle.
     Repeater {
         id: railRepeater
         model: overlay.rails
@@ -128,19 +161,80 @@ PanelWindow {
 
             readonly property bool vertical: modelData.orientation === "vertical"
             property bool dragging: false
+            // Pointer travel since the press. The seam follows the pointer, so
+            // the lightbar is offset by the same amount and appears to travel
+            // with the window edge.
+            property real dragTotal: 0
             property real lastX: 0
             property real lastY: 0
+            readonly property bool lit: dragging || handle.containsMouse
 
+            // Feeds the shared hue animation; balanced again on teardown.
+            onLitChanged: overlay.litRails += lit ? 1 : -1
+            Component.onDestruction: if (lit) overlay.litRails -= 1
+
+            // The delegate itself stays where the geometry puts it. Only the
+            // artwork below is offset, because a MouseArea that slid along with
+            // the bar would move out from under the pointer and the reported
+            // deltas would feed back into themselves.
             x: modelData.x
             y: modelData.y
             width: modelData.w
             height: modelData.h
 
-            Rectangle {
-                anchors.fill: parent
-                color: overlay.railColor
-                opacity: rail.dragging ? 0.5 : (handle.containsMouse ? 0.82 : 0)
-                Behavior on opacity { NumberAnimation { duration: 80 } }
+            Item {
+                id: art
+
+                x: rail.vertical ? rail.dragTotal : 0
+                y: rail.vertical ? 0 : rail.dragTotal
+                width: rail.width
+                height: rail.height
+                opacity: rail.dragging ? 1.0 : (rail.lit ? 0.9 : 0)
+                visible: opacity > 0.01
+                Behavior on opacity { NumberAnimation { duration: 90 } }
+
+                // Soft spill. A wider wash whose edges fade out, which is what
+                // makes the bar read as light rather than as paint.
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.leftMargin: rail.vertical ? -6 : 0
+                    anchors.rightMargin: rail.vertical ? -6 : 0
+                    anchors.topMargin: rail.vertical ? 0 : -6
+                    anchors.bottomMargin: rail.vertical ? 0 : -6
+                    radius: Math.min(width, height) / 2
+                    opacity: 0.45
+                    gradient: Gradient {
+                        orientation: rail.vertical ? Gradient.Horizontal : Gradient.Vertical
+                        GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, 0) }
+                        GradientStop { position: 0.5; color: overlay.lightColor(0.5, 0.8) }
+                        GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0) }
+                    }
+                }
+
+                // The bar proper: a colour ramp running from end to end.
+                Rectangle {
+                    anchors.fill: parent
+                    radius: Math.min(width, height) / 2
+                    gradient: Gradient {
+                        orientation: rail.vertical ? Gradient.Vertical : Gradient.Horizontal
+                        GradientStop { position: 0.0; color: overlay.lightColor(0.0, 0.92) }
+                        GradientStop { position: 0.5; color: overlay.lightColor(0.5, 0.92) }
+                        GradientStop { position: 1.0; color: overlay.lightColor(1.0, 0.92) }
+                    }
+                }
+
+                // The filament: a bright core line down the middle.
+                Rectangle {
+                    anchors.fill: parent
+                    radius: Math.min(width, height) / 2
+                    opacity: 0.55
+                    gradient: Gradient {
+                        orientation: rail.vertical ? Gradient.Horizontal : Gradient.Vertical
+                        GradientStop { position: 0.0; color: Qt.rgba(1, 1, 1, 0) }
+                        GradientStop { position: 0.5; color: Qt.rgba(1, 1, 1, 0.9) }
+                        GradientStop { position: 1.0; color: Qt.rgba(1, 1, 1, 0) }
+                    }
+                }
             }
 
             MouseArea {
@@ -152,6 +246,7 @@ PanelWindow {
 
                 onPressed: function(mouse) {
                     rail.dragging = true;
+                    rail.dragTotal = 0;
                     rail.lastX = mouse.x;
                     rail.lastY = mouse.y;
                 }
@@ -162,11 +257,20 @@ PanelWindow {
                     var dy = rail.vertical ? 0 : Math.round(mouse.y - rail.lastY);
                     rail.lastX = mouse.x;
                     rail.lastY = mouse.y;
-                    var factor = modelData.resizeFactor || 1;
-                    overlay.service.resizeWindow(modelData.resizeAddress, dx * factor, dy * factor);
+                    // The seam travels with the pointer, so the lightbar does
+                    // too. The delta needs no per-window sign flip: Hyprland
+                    // moves the resized window's split-facing edge by exactly
+                    // the requested amount, whichever neighbour it is.
+                    rail.dragTotal += rail.vertical ? dx : dy;
+                    overlay.service.resizeWindow(modelData.resizeAddress, dx, dy);
                 }
 
-                onReleased: rail.dragging = false
+                // Re-derive from the real geometry as soon as the drag ends so
+                // the bar settles onto the true seam.
+                onReleased: {
+                    rail.dragging = false;
+                    if (overlay.service) overlay.service.refreshLayout();
+                }
                 onCanceled: rail.dragging = false
             }
         }

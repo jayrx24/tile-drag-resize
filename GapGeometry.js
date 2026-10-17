@@ -67,8 +67,8 @@ function windowRect(toplevel) {
 // horizontal seam when one sits directly above the other. Each seam becomes a
 // "rail" rectangle placed exactly over the shared gap.
 //
-// Rails are returned in global coordinates. Each rail records the two
-// adjacent window addresses plus which one to resize and in which direction.
+// Rails are returned in global coordinates. Each rail records the two adjacent
+// window addresses plus which one to resize while dragging.
 function findRails(windows, maxGap, minOverlap, minGap) {
   var rails = [];
   var n = windows.length;
@@ -96,8 +96,7 @@ function findRails(windows, maxGap, minOverlap, minGap) {
           h: vOverlap,
           first: left.address,
           second: right.address,
-          resizeAddress: left.address,
-          resizeFactor: 1
+          resizeAddress: left.address
         });
       }
 
@@ -118,8 +117,7 @@ function findRails(windows, maxGap, minOverlap, minGap) {
           h: hGap,
           first: top.address,
           second: bottom.address,
-          resizeAddress: top.address,
-          resizeFactor: 1
+          resizeAddress: top.address
         });
       }
     }
@@ -223,8 +221,7 @@ function mergeSeam(rails, axis) {
           second: item.second,
           commonFirst: true,
           commonSecond: true,
-          resizeAddress: item.resizeAddress,
-          resizeFactor: item.resizeFactor
+          resizeAddress: item.resizeAddress
         };
         byRoot[r] = bucket;
       } else {
@@ -237,20 +234,20 @@ function mergeSeam(rails, axis) {
 
     for (var key in byRoot) {
       var c = byRoot[key];
-      // Resize the window that every piece of the seam shares. A shared
-      // left/top window grows with the drag; a shared right/bottom window
-      // shrinks, hence the inverted factor.
+      // Resize the window that every piece of the seam shares. Whichever
+      // neighbour we pick, the seam travels *with* the drag delta: Hyprland
+      // moves the resized window's edge that faces the split by the requested
+      // amount. Growing the left/top window pushes that edge right/down, and
+      // shrinking the right/bottom window pulls its facing edge the same way,
+      // so the signed delta needs no per-window correction.
       var address = c.resizeAddress;
-      var factor = c.resizeFactor;
       if (c.commonFirst && !c.commonSecond) {
         address = c.first;
-        factor = 1;
       } else if (c.commonSecond && !c.commonFirst) {
         address = c.second;
-        factor = -1;
       }
 
-      var out = { orientation: axis, resizeAddress: address, resizeFactor: factor };
+      var out = { orientation: axis, resizeAddress: address };
       if (vertical) {
         out.x = groups[j].line;
         out.y = c.start;
@@ -315,8 +312,8 @@ function toArray(model) {
 // Returns an array of rail objects in monitor-local coordinates, each with:
 //   orientation    "vertical" | "horizontal"
 //   x, y, w, h     rail rectangle (x/y are the top-left)
-//   resizeAddress  window address to resize while dragging
-//   resizeFactor   1 or -1, multiplied into the drag delta
+//   resizeAddress  window address to resize while dragging; the drag delta is
+//                  applied to it unchanged, since the seam follows the delta
 function collect(monitorX, monitorY, toplevels, opts) {
   opts = opts || {};
   var maxGap = Math.max(0, Number(opts.maxGap) || 0);
@@ -344,8 +341,7 @@ function collect(monitorX, monitorY, toplevels, opts) {
       y: r.y - oy,
       w: r.w,
       h: r.h,
-      resizeAddress: r.resizeAddress,
-      resizeFactor: r.resizeFactor
+      resizeAddress: r.resizeAddress
     });
   }
   return out;
