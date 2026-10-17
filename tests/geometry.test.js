@@ -313,4 +313,60 @@ test("lockError grows when a release leaves the window behind", () => {
   assert.strictEqual(G.lockError(null, { x: 1, y: 1 }, 0, 0), null);
 });
 
+// --- dispatch queue --------------------------------------------------------
+
+const Q = require("../DispatchQueue.js");
+
+test("a resize merges with the resize already waiting for that window", () => {
+  let q = Q.enqueue([], { kind: "resize", address: "0xa", dx: 5, dy: 0 });
+  q = Q.enqueue(q, { kind: "resize", address: "0xa", dx: 7, dy: -3 });
+  assert.strictEqual(q.length, 1);
+  assert.deepStrictEqual([q[0].dx, q[0].dy], [12, -3]);
+});
+
+test("resizes for different windows do not merge", () => {
+  let q = Q.enqueue([], { kind: "resize", address: "0xa", dx: 5, dy: 0 });
+  q = Q.enqueue(q, { kind: "resize", address: "0xb", dx: 5, dy: 0 });
+  q = Q.enqueue(q, { kind: "resize", address: "0xa", dx: 1, dy: 0 });
+  assert.strictEqual(q.length, 3);
+  assert.deepStrictEqual(q.map((e) => e.address), ["0xa", "0xb", "0xa"]);
+});
+
+test("a resize never merges ahead of a queued property change", () => {
+  // The property must reach Hyprland before the resizes that follow it, so the
+  // merge only ever looks at the tail of the queue.
+  let q = Q.enqueue([], { kind: "resize", address: "0xa", dx: 5, dy: 0 });
+  q = Q.enqueue(q, { kind: "prop", address: "0xa", prop: "no_anim", value: 1 });
+  q = Q.enqueue(q, { kind: "resize", address: "0xa", dx: 5, dy: 0 });
+  assert.strictEqual(q.length, 3);
+  assert.strictEqual(q[1].kind, "prop");
+  assert.deepStrictEqual([q[2].dx, q[2].dy], [5, 0]);
+});
+
+test("enqueue and take do not mutate the queue they are given", () => {
+  const original = [{ kind: "resize", address: "0xa", dx: 1, dy: 0 }];
+  const copy = original.slice();
+  const added = Q.enqueue(original, { kind: "resize", address: "0xa", dx: 1, dy: 0 });
+  assert.strictEqual(original.length, 1);
+  assert.deepStrictEqual(original, copy);
+  assert.strictEqual(added[0].dx, 2);
+  const taken = Q.take(added);
+  assert.strictEqual(added.length, 1);
+  assert.strictEqual(taken.entry.dx, 2);
+  assert.strictEqual(taken.queue.length, 0);
+});
+
+test("take on an empty queue yields no entry", () => {
+  assert.strictEqual(Q.take([]).entry, null);
+  assert.strictEqual(Q.take(null).entry, null);
+});
+
+test("the queue is bounded", () => {
+  let q = [];
+  for (let i = 0; i < Q.LIMIT + 10; i++)
+    q = Q.enqueue(q, { kind: "prop", address: "0xa", prop: "p" + i, value: 1 });
+  assert.strictEqual(q.length, Q.LIMIT);
+  assert.strictEqual(q[q.length - 1].prop, "p" + (Q.LIMIT + 9));
+});
+
 console.log("\n" + passed + " checks passed" + (process.exitCode ? " (with failures)" : ""));

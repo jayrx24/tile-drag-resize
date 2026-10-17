@@ -54,6 +54,24 @@ drag with the left mouse button. The lightbar tracks the seam while you drag, so
 it stays on the edge it is moving. Floating, fullscreen, hidden, and pinned
 windows are ignored.
 
+A resize drag dispatches on every pointer motion, so two things matter more than
+the command itself. First, the command goes over Hyprland's request socket
+rather than through a spawned `hyprctl` — about 0.05 ms instead of 3 ms plus a
+fork per event, fast enough for the window to keep up with the pointer. Bursts
+are merged: a drag issues *relative* deltas, and consecutive ones for the same
+window add up, so at most one command is in flight and none of the motion is
+lost (`DispatchQueue.js`). If the socket stops answering, it falls back to the
+process-per-resize path.
+
+Second, Hyprland animates window size changes (`windows` in the animation
+config, ~260 ms here), and every dispatch would restart that animation, leaving
+the edge crawling after the pointer. While a rail is being dragged the window
+gets the `no_anim` property, so the edge lands where the pointer puts it, and
+the property is dropped again on release. It is a *runtime*, per-window property
+— no config file is written, nothing else on screen is affected, and it goes
+away with the window. If the running Hyprland does not know the property, the
+command is ignored and the resize behaves exactly as it did before.
+
 The bar's colour ramp is derived from the theme accent and scrolls *along* the
 bar: up/down for a vertical split, side to side for a horizontal one. One full
 colour cycle takes three seconds — `wavePeriod` in `GapOverlay.qml`; lower is
@@ -123,6 +141,9 @@ omarchy shell tile-drag-resize reapply   # re-assert border settings and the bin
 omarchy shell tile-drag-resize preview   # pin the move border on for 8s (visual check)
 omarchy shell tile-drag-resize dragstatus # what the move detector currently sees
 omarchy shell tile-drag-resize snapshot  # every window rectangle the detector tracks
+omarchy shell tile-drag-resize resizeby 40 0  # resize the focused window (checks the dispatch path)
+omarchy shell tile-drag-resize noanim 1       # raise/drop no_anim on the focused window
+omarchy shell tile-drag-resize dispatchstatus # queue and socket state of the resize path
 ```
 
 `preview` outlines one window for eight seconds without dragging anything, which
@@ -154,6 +175,7 @@ o.bind("SUPER + CTRL + M", "Toggle Tile Drag & Resize", "omarchy shell tile-drag
 | `Service.qml` | Owns both features: gap geometry refresh, overlay construction, resize dispatch, middle-drag state, bind management, IPC. |
 | `GapOverlay.qml` | One transparent layer-shell surface per monitor; only gap corridors take input. Also draws the drag border. |
 | `GapGeometry.js` | Pure geometry that turns tiled-window rectangles into draggable gap rails, plus the pure-translation test that recognises a drag and the pointer-tracking maths (time-aligned sample lookup, lock error). Unit-tested under Node. |
+| `DispatchQueue.js` | Pure queue for commands sent over Hyprland's request socket: merges consecutive resizes of the same window, so a drag issues one command at a time without losing any motion. Unit-tested under Node. |
 | `BarWidget.qml` | The bar icon and its click behaviour. |
 | `Panel.qml` | The options dropdown. |
 
@@ -169,7 +191,9 @@ move detection (a drag is a position change with no size change; layout shifts,
 resizes, and sub-pixel jitter are all rejected), the pointer-tracking maths
 (time-aligned interpolation, history trimming, the lock error a release leaves
 behind), monitor-local conversion, and the QML window-list shapes the shell
-actually hands the module.
+actually hands the module. Six more cover the dispatch queue: resizes merging,
+resizes *not* merging past a queued property change, and the queue staying
+immutable and bounded.
 
 The middle-drag path also has a live end-to-end test:
 

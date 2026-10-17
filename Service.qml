@@ -19,6 +19,7 @@ import Quickshell
 import Quickshell.Hyprland
 import Quickshell.Io
 import qs.Commons
+import "DispatchQueue.js" as DispatchQueue
 import "GapGeometry.js" as GapGeometry
 
 Item {
@@ -93,10 +94,106 @@ Item {
         }
     }
 
-    // Resize a window by a relative amount. On Lua-capable Hyprland we go
-    // through the dispatcher API; otherwise the legacy dispatcher.
+    // ================================================ gap resize: dispatching
+    //
+    // A resize drag dispatches on every pointer motion, so the cost of the
+    // command path matters more than the command: spawning hyprctl per event
+    // takes ~3 ms of process time each and forks the shell for every one of
+    // them, which is easily enough to leave the window behind the pointer. The
+    // command goes over Hyprland's request socket instead — one command per
+    // connection, ~0.05 ms — and bursts are absorbed by merging: a drag issues
+    // relative resizes, so consecutive ones for the same window simply add up,
+    // and only one command is ever in flight.
+    //
+    // If the socket stops answering, everything falls back to the
+    // process-per-command path, which is slow but is what worked before.
+    property var dispatchQueue: []
+    property bool dispatchBusy: false
+    property string dispatchCmd: ""
+    property string dispatchReply: ""
+    property int dispatchFailures: 0
+    property bool dispatchBroken: false
+
+    function queueCommand(entry) {
+        if (dispatchBroken) return false;
+        dispatchQueue = DispatchQueue.enqueue(dispatchQueue, entry);
+        pumpDispatch();
+        return true;
+    }
+
+    // The wire form of one queued entry. Hyprland's request socket takes one
+    // command per connection and no trailing newline, and its Lua API spells
+    // its window properties the way the Lua config does.
+    function renderCommand(entry) {
+        if (entry.kind === "resize") {
+            if (Hyprland.usingLua) {
+                return "eval hl.dispatch(hl.dsp.window.resize({ x = " + entry.dx + ", y = " + entry.dy
+                    + ", relative = true, window = \"address:" + entry.address + "\" }))";
+            }
+            return "dispatch resizewindowpixel " + entry.dx + " " + entry.dy
+                + ",address:" + entry.address;
+        }
+        if (Hyprland.usingLua) {
+            return "eval hl.dispatch(hl.dsp.window.set_prop({ prop = \"" + entry.prop + "\", value = "
+                + entry.value + ", window = \"address:" + entry.address + "\" }))";
+        }
+        return "dispatch setprop " + entry.prop + " " + entry.value + ",address:" + entry.address;
+    }
+
+    function pumpDispatch() {
+        if (dispatchBusy || dispatchBroken || dispatchQueue.length === 0) return;
+        var next = DispatchQueue.take(dispatchQueue);
+        dispatchQueue = next.queue;
+        if (!next.entry) return;
+        dispatchCmd = renderCommand(next.entry);
+        dispatchBusy = true;
+        dispatchWatch.restart();
+        if (dispatchSocket.connected) {
+            flushDispatch();
+        } else {
+            // Connecting; onConnected flushes the queued command.
+            dispatchSocket.connected = true;
+        }
+    }
+
+    // Send and hang up. Hyprland answers each command and closes the connection
+    // itself, and its `eval` reply is small enough to arrive together with that
+    // close — which Quickshell logs as an error — so the connection is closed
+    // from this side the moment the command is out. The reply is not needed:
+    // these are fire-and-forget dispatches, and the socket's own write buffer
+    // keeps the command intact across the close.
+    function flushDispatch() {
+        if (dispatchCmd === "") return;
+        dispatchSocket.write(dispatchCmd);
+        dispatchSocket.flush();
+        dispatchCmd = "";
+        dispatchSocket.connected = false;
+    }
+
+    // A command that never gets out would hold the slot for good, so a few
+    // failed connects in a row and the socket is abandoned for good.
+    function noteDispatchFailure() {
+        if (dispatchSocket.connected) dispatchSocket.connected = false;
+        dispatchCmd = "";
+        dispatchBusy = false;
+        dispatchFailures += 1;
+        if (dispatchFailures >= 3) dispatchBroken = true;
+        else pumpDispatch();
+    }
+
+    function dispatchDiagnostic() {
+        return "queue=" + dispatchQueue.length
+            + " busy=" + dispatchBusy
+            + " failures=" + dispatchFailures
+            + " broken=" + dispatchBroken
+            + " resize=" + (resizeAddress || "-");
+    }
+
+    // Resize a window by a relative amount. The delta is applied in full even
+    // when commands are merged: merging is addition.
     function resizeWindow(address, dx, dy) {
         if (!address || (!dx && !dy)) return;
+        if (queueCommand({ kind: "resize", address: address, dx: dx, dy: dy })) return;
         if (Hyprland.usingLua) {
             Quickshell.execDetached(["hyprctl", "eval",
                 'hl.dispatch(hl.dsp.window.resize({ x = ' + dx + ', y = ' + dy
@@ -104,6 +201,47 @@ Item {
         } else {
             Quickshell.execDetached(["hyprctl", "dispatch", "resizewindowpixel",
                 dx + " " + dy + ",address:" + address]);
+        }
+    }
+
+    // ---------------------------------------------- resize: window animation
+    //
+    // Hyprland animates window size changes (the `windows` animation), and a
+    // resize dispatches on every pointer motion, so every command restarts that
+    // animation: the edge crawls towards the pointer instead of tracking it,
+    // which is what makes a resize feel slow and rubbery.
+    //
+    // `no_anim` is a per-window *runtime* property, so it is raised for the
+    // window being dragged and dropped again on release. No config file is
+    // touched, and the property goes away with the window. If the running
+    // Hyprland does not know the property, the dispatch is ignored and the
+    // resize simply behaves as it did before.
+    property string resizeAddress: ""
+
+    function beginResize(address) {
+        if (!address || address === resizeAddress) return;
+        endResize();
+        resizeAddress = address;
+        setWindowProp(address, "no_anim", 1, "noanim");
+    }
+
+    function endResize() {
+        if (resizeAddress === "") return;
+        setWindowProp(resizeAddress, "no_anim", 0, "noanim");
+        resizeAddress = "";
+    }
+
+    function setWindowProp(address, prop, value, legacyName) {
+        if (!address) return;
+        var name = Hyprland.usingLua ? prop : legacyName;
+        if (queueCommand({ kind: "prop", address: address, prop: name, value: value })) return;
+        if (Hyprland.usingLua) {
+            Quickshell.execDetached(["hyprctl", "eval",
+                'hl.dispatch(hl.dsp.window.set_prop({ prop = "' + name + '", value = ' + value
+                + ', window = "address:' + address + '" }))']);
+        } else {
+            Quickshell.execDetached(["hyprctl", "dispatch", "setprop",
+                name + " " + value + ",address:" + address]);
         }
     }
 
@@ -510,8 +648,9 @@ Item {
     }
 
     // Disabling or removing the plugin must hand the middle button back to the
-    // applications underneath.
+    // applications underneath, and drop any window property it raised.
     Component.onDestruction: {
+        endResize();
         if (dragEnabled) Quickshell.execDetached(["hyprctl", "eval", unbindScript]);
     }
 
@@ -620,6 +759,43 @@ Item {
         onTriggered: if (root.cursorArmed && !cursorSocket.connected) cursorSocket.connected = true
     }
 
+    // Commands that run on pointer motion go out here, one per connection, and
+    // this side closes each connection as soon as the reply lands so the close
+    // is never logged as a peer-closed warning. See the dispatch section above.
+    Socket {
+        id: dispatchSocket
+
+        path: Hyprland.requestSocketPath
+        connected: false
+
+        parser: SplitParser {
+            onRead: (line) => {
+                // Fire-and-forget: nothing is expected back, but anything that
+                // does arrive is only a diagnostic.
+                if (line.length > 0) root.dispatchReply = line;
+            }
+        }
+
+        onConnectedChanged: {
+            if (connected) {
+                root.flushDispatch();
+            } else {
+                root.dispatchBusy = false;
+                dispatchWatch.stop();
+                root.pumpDispatch();
+            }
+        }
+
+        onError: root.noteDispatchFailure()
+    }
+
+    // A reply that never comes must not hold the dispatch slot forever.
+    Timer {
+        id: dispatchWatch
+        interval: 400
+        onTriggered: root.noteDispatchFailure()
+    }
+
     // Applies bind changes to Hyprland, one process at a time.
     Process {
         id: bindProc
@@ -664,6 +840,18 @@ Item {
         function status(): string { return root.dragEnabled ? "enabled" : "disabled" }
         function reapply(): void { root.reapply() }
         function preview(): void { root.previewMove() }
+        function dispatchstatus(): string { return root.dispatchDiagnostic() }
+        // Drive the resize path without a mouse, path for checking it:
+        //   omarchy shell tile-drag-resize resizeby 40 0
+        //   omarchy shell tile-drag-resize noanim 1
+        function resizeby(dx: int, dy: int): void {
+            var r = GapGeometry.windowRect(Hyprland.activeToplevel, { allowFloating: true });
+            if (r) root.resizeWindow(r.address, dx, dy);
+        }
+        function noanim(on: int): void {
+            var r = GapGeometry.windowRect(Hyprland.activeToplevel, { allowFloating: true });
+            if (on) { if (r) root.beginResize(r.address); } else root.endResize();
+        }
         function dragstatus(): string {
             return "moving=" + (root.moveAddress || "-")
                 + " active=" + root.moveActive

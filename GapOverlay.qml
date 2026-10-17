@@ -293,6 +293,9 @@ PanelWindow {
                     rail.dragTotal = 0;
                     rail.lastX = mouse.x;
                     rail.lastY = mouse.y;
+                    // Hyprland would otherwise animate every one of the resizes
+                    // this drag is about to send; see Service.qml.
+                    if (overlay.service) overlay.service.beginResize(modelData.resizeAddress);
                 }
 
                 onPositionChanged: function(mouse) {
@@ -313,9 +316,15 @@ PanelWindow {
                 // the bar settles onto the true seam.
                 onReleased: {
                     rail.dragging = false;
-                    if (overlay.service) overlay.service.refreshLayout();
+                    if (overlay.service) {
+                        overlay.service.endResize();
+                        overlay.service.refreshLayout();
+                    }
                 }
-                onCanceled: rail.dragging = false
+                onCanceled: {
+                    rail.dragging = false;
+                    if (overlay.service) overlay.service.endResize();
+                }
             }
         }
     }
