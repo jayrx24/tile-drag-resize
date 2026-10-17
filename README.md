@@ -10,8 +10,9 @@ single unit:
   button to resize the adjacent tiles. The bar rides along with the seam as you
   drag, and scrolls a colour ramp along its length while it is lit.
 - **Middle-drag** — hold the middle mouse button over any window to move it,
-  the same way `Super` + left-drag does, without touching the keyboard. A bar
-  icon toggles it on and off.
+  the same way `Super` + left-drag does, without touching the keyboard. While
+  the window moves, a thin lightbar border in the same colours flows around it.
+  A bar icon toggles the feature on and off.
 
 The two features share one manifest, one service, and one bar icon, so there is
 nothing extra to enable or keep in sync.
@@ -63,6 +64,18 @@ per-frame colour work.
 feature. The icon shows a mouse (`󰍽`) when on and a crossed-out mouse (`󰍾`)
 when off.
 
+While you drag a window, a three-pixel lightbar border appears around it and
+flows around the perimeter in the same colours as the gap bars. Hyprland emits
+no drag begin/end event and the shell cannot see the mouse button, so the drag
+is inferred from geometry: a window that changes position while keeping its size
+has been dragged. Two samples in a row are needed, which keeps ordinary layout
+changes (one sample) and gap resizes (a size change) from lighting anything up.
+The border is polled every 16 ms while it is moving and kept for 600 ms after
+the motion stops, so a pause mid-drag does not make it flicker. `movePollMs`,
+`moveGraceMs`, and `moveConfirmSamples` in `Service.qml` tune that. While a
+window is moving, the gap bars are left alone so they do not flicker along with
+the shifting layout.
+
 The service turns off Hyprland's own border resizing (`general:resize_on_border`
 and `general:hover_icon_on_border`) at runtime so the gap overlay owns the
 window edges. No configuration file is written; restore border resizing after
@@ -81,7 +94,17 @@ omarchy shell tile-drag-resize enable    # middle-drag on
 omarchy shell tile-drag-resize disable   # middle-drag off
 omarchy shell tile-drag-resize status    # prints "enabled" or "disabled"
 omarchy shell tile-drag-resize reapply   # re-assert border settings and the bind
+omarchy shell tile-drag-resize preview   # pin the move border on for 8s (visual check)
+omarchy shell tile-drag-resize dragstatus # what the move detector currently sees
+omarchy shell tile-drag-resize snapshot  # every window rectangle the detector tracks
 ```
+
+`preview` outlines one window for eight seconds without dragging anything, which
+is the quickest way to check the border's styling. `dragstatus` prints the
+inferred drag (`moving=`, `active=`, `streak=`, `tracked=`, `samples=`,
+`rect=`) and is the first thing to reach for if the border does not appear while
+dragging; `snapshot` dumps the rectangles it is comparing, which shows whether
+the window is being seen at all.
 
 State lives at `$XDG_STATE_HOME/tile-drag-resize/enabled` (`~/.local/state` by
 default).
@@ -100,8 +123,8 @@ o.bind("SUPER + CTRL + M", "Toggle Tile Drag & Resize", "omarchy shell tile-drag
 | --- | --- |
 | `manifest.json` | Plugin id, kinds (`service`, `bar-widget`), entry points. |
 | `Service.qml` | Owns both features: gap geometry refresh, overlay construction, resize dispatch, middle-drag state, bind management, IPC. |
-| `GapOverlay.qml` | One transparent layer-shell surface per monitor; only gap corridors take input. |
-| `GapGeometry.js` | Pure geometry that turns tiled-window rectangles into draggable gap rails. Unit-tested under Node. |
+| `GapOverlay.qml` | One transparent layer-shell surface per monitor; only gap corridors take input. Also draws the drag border. |
+| `GapGeometry.js` | Pure geometry that turns tiled-window rectangles into draggable gap rails, plus the pure-translation test that recognises a drag. Unit-tested under Node. |
 | `BarWidget.qml` | The bar icon and its click behaviour. |
 | `Panel.qml` | The options dropdown. |
 
@@ -111,9 +134,11 @@ o.bind("SUPER + CTRL + M", "Toggle Tile Drag & Resize", "omarchy shell tile-drag
 node tests/geometry.test.js
 ```
 
-18 assertions cover window extraction, seam detection, full-height merging,
-resize targeting, monitor-local conversion, and the QML window-list shapes the
-shell actually hands the module.
+22 assertions cover window extraction (including the floating-window exception
+the drag border needs), seam detection, full-height merging, resize targeting,
+move detection (a drag is a position change with no size change; layout shifts,
+resizes, and sub-pixel jitter are all rejected), monitor-local conversion, and
+the QML window-list shapes the shell actually hands the module.
 
 Two live diagnostics are included as well:
 

@@ -51,6 +51,62 @@ test("reads lastIpcObject wrappers", () => {
   assert.strictEqual(r.address, "0xa");
 });
 
+test("windowRect keeps floating windows only when asked", () => {
+  const f = win("0xa", 0, 0, 100, 100, { floating: true });
+  // Rail search: a floating window is not part of the tiling.
+  assert.strictEqual(G.windowRect(f), null);
+  assert.strictEqual(G.collect(0, 0, [f, win("0xb", 106, 0, 100, 100)], OPTS).length, 0);
+  // Move highlight: Hyprland can float a window while it is being dragged.
+  const kept = G.windowRect(f, { allowFloating: true });
+  assert.strictEqual(kept.address, "0xa");
+  assert.deepStrictEqual([kept.x, kept.y, kept.w, kept.h], [0, 0, 100, 100]);
+  // Pinned windows come along with the same flag.
+  assert.strictEqual(G.windowRect(win("0xa", 0, 0, 1, 1, { pinned: true })), null);
+  assert.strictEqual(G.windowRect(win("0xa", 0, 0, 1, 1, { pinned: true }), { allowFloating: true }).address, "0xa");
+  // Hidden and fullscreen windows stay out either way.
+  assert.strictEqual(G.windowRect(win("0xa", 0, 0, 1, 1, { hidden: true }), { allowFloating: true }), null);
+  assert.strictEqual(G.windowRect(win("0xa", 0, 0, 1, 1, { fullscreen: 2 }), { allowFloating: true }), null);
+});
+
+// --- move detection (the middle-button drag highlight) ----------------------
+
+function rects(list) {
+  const out = {};
+  for (const [addr, x, y, w, h] of list) out[addr] = { x, y, w, h };
+  return out;
+}
+
+test("detectMove finds a window that moved without resizing", () => {
+  const before = rects([["0xa", 0, 0, 100, 100], ["0xb", 110, 0, 100, 100]]);
+  const after = rects([["0xa", 40, 25, 100, 100], ["0xb", 110, 0, 100, 100]]);
+  assert.strictEqual(G.detectMove(before, after, 2), "0xa");
+});
+
+test("detectMove ignores resizes, layout shifts and jitter", () => {
+  const before = rects([["0xa", 0, 0, 100, 100], ["0xb", 110, 0, 100, 100]]);
+  // A gap resize changes the size of the window being resized.
+  assert.strictEqual(G.detectMove(before, rects([["0xa", 0, 0, 140, 100], ["0xb", 150, 0, 60, 100]]), 2), "");
+  // A layout change moves and resizes the passengers.
+  assert.strictEqual(G.detectMove(before, rects([["0xa", 0, 0, 60, 100], ["0xb", 70, 0, 140, 100]]), 2), "");
+  // A sub-pixel nudge is noise, not a drag.
+  assert.strictEqual(G.detectMove(before, rects([["0xa", 1, 1, 100, 100], ["0xb", 110, 0, 100, 100]]), 2), "");
+  // A window that only appeared or only vanished is not a move.
+  assert.strictEqual(G.detectMove(before, rects([["0xa", 0, 0, 100, 100], ["0xc", 300, 0, 100, 100]]), 2), "");
+});
+
+test("detectMove picks the largest move and tolerates rounding", () => {
+  const before = rects([["0xa", 0, 0, 100, 100], ["0xb", 110, 0, 100, 100]]);
+  // Both shifted; the one that travelled furthest is the one being dragged.
+  const after = rects([["0xa", 10, 0, 100, 100], ["0xb", 150, 0, 100, 100]]);
+  assert.strictEqual(G.detectMove(before, after, 2), "0xb");
+  // A one-pixel size change (compositor rounding) still counts as a move.
+  const rounded = rects([["0xa", 40, 0, 101, 100], ["0xb", 110, 0, 100, 100]]);
+  assert.strictEqual(G.detectMove(before, rounded, 2), "0xa");
+  // Missing snapshots are handled rather than thrown on.
+  assert.strictEqual(G.detectMove(null, before, 2), "");
+  assert.strictEqual(G.detectMove(before, null, 2), "");
+});
+
 // --- seams -----------------------------------------------------------------
 
 test("side-by-side pair yields one vertical rail", () => {

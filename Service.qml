@@ -106,6 +106,130 @@ Item {
         }
     }
 
+    // ============================================== move highlight: inference
+    //
+    // Middle-dragging a window moves it, but Hyprland emits no drag
+    // begin/end event and the shell cannot see the mouse button, so the window
+    // being moved is inferred from geometry instead: a drag is a *pure
+    // translation*, so we look for a window that keeps changing position while
+    // its size stays put. That also excludes the two cases we must NOT light up
+    // — a layout change moves windows once (a single sample), and a gap resize
+    // changes the size rather than just the position.
+    readonly property int movePollMs: 16        // fast poll while a move is suspected
+    readonly property int moveGraceMs: 600      // hold the border through a pause
+    readonly property int moveEpsilon: 2        // px that count as a change
+    readonly property int moveConfirmSamples: 2 // consecutive samples to light up
+
+    property string moveAddress: ""
+    property string moveMonitor: ""
+    property var moveRect: null
+    property bool moveActive: false
+    property int moveStreak: 0
+    property double moveLastAt: 0
+    property var moveRects: ({})
+    // How many times the geometry has been sampled; purely diagnostic, and a
+    // quick way to spot the poll rate from IPC.
+    property int moveSamples: 0
+
+    // `omarchy shell tile-drag-resize preview` pins the border onto one window
+    // for a few seconds, so the highlight can be looked at without dragging
+    // anything (and so it can be checked from a screenshot).
+    property string previewAddress: ""
+    property double previewUntil: 0
+
+    // Every mapped window keyed by address, with its monitor name. Floating
+    // windows are included: Hyprland can float a window for the duration of a
+    // drag, and that window is exactly the one we want to outline.
+    function windowSnapshot() {
+        var out = ({});
+        var screens = GapGeometry.toArray(Quickshell.screens);
+        for (var s = 0; s < screens.length; s++) {
+            var mon = Hyprland.monitorFor(screens[s]);
+            if (!mon || !mon.activeWorkspace) continue;
+            var tops = GapGeometry.toArray(mon.activeWorkspace.toplevels.values);
+            for (var i = 0; i < tops.length; i++) {
+                var r = GapGeometry.windowRect(tops[i], { allowFloating: true });
+                if (!r || !r.address) continue;
+                out[r.address] = { x: r.x, y: r.y, w: r.w, h: r.h, monitor: mon.name };
+            }
+        }
+        return out;
+    }
+
+    function showMove(address, rect) {
+        moveAddress = address;
+        moveMonitor = rect.monitor;
+        moveRect = { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+    }
+
+    function hideMove() {
+        moveAddress = "";
+        moveMonitor = "";
+        moveRect = null;
+        moveStreak = 0;
+        moveActive = false;
+    }
+
+    // Compare this sample against the previous one and decide whether a window
+    // is being dragged.
+    function sampleMoves() {
+        var now = Date.now();
+        var snap = windowSnapshot();
+        moveSamples += 1;
+
+        // A pinned preview wins for as long as it lasts, and tracks the window
+        // live (handy for checking the rendering from a screenshot).
+        if (previewAddress !== "" && now < previewUntil) {
+            var pinned = snap[previewAddress];
+            moveRects = snap;
+            if (pinned) {
+                showMove(previewAddress, pinned);
+                moveActive = true;
+                if (!moveWatch.running) moveWatch.start();
+                return;
+            }
+            previewAddress = "";
+        } else if (previewAddress !== "") {
+            // The preview just expired. Drop its pinned state unless a real
+            // drag has taken over the same sample.
+            previewAddress = "";
+            if (moveStreak === 0) hideMove();
+        }
+
+        // The largest pure translation since the previous sample wins. A size
+        // change (a resize) or a one-off layout change never qualifies.
+        var best = GapGeometry.detectMove(moveRects, snap, moveEpsilon);
+        moveRects = snap;
+
+        if (best !== "") {
+            moveStreak += 1;
+            moveLastAt = now;
+            showMove(best, snap[best]);
+            if (!moveWatch.running) moveWatch.start();
+        } else if (now - moveLastAt > moveGraceMs) {
+            // Everything has settled: drop the border and re-derive the rails,
+            // which were suppressed while the window was moving.
+            if (moveStreak > 0) {
+                hideMove();
+                refreshLayout();
+            }
+            if (moveWatch.running) moveWatch.stop();
+        }
+
+        moveActive = moveStreak >= moveConfirmSamples && (now - moveLastAt) <= moveGraceMs;
+    }
+
+    function previewMove() {
+        var snap = windowSnapshot();
+        var first = "";
+        for (var addr in snap) { first = addr; break; }
+        if (!first) return;
+        previewAddress = first;
+        previewUntil = Date.now() + 8000;
+        if (!moveWatch.running) moveWatch.start();
+        sampleMoves();
+    }
+
     // ================================================== drag: state and binds
 
     function persistState(on) {
@@ -179,7 +303,23 @@ Item {
         interval: 180
         repeat: true
         running: true
-        onTriggered: root.refreshLayout()
+        onTriggered: {
+            root.refreshLayout()
+            root.sampleMoves()
+        }
+    }
+
+    // Fast poll while a window looks like it is being dragged, so the border
+    // keeps up with the pointer. Started on demand and stopped again once the
+    // geometry settles, so an idle shell does no extra IPC traffic.
+    Timer {
+        id: moveWatch
+        interval: root.movePollMs
+        repeat: true
+        onTriggered: {
+            Hyprland.refreshToplevels()
+            root.sampleMoves()
+        }
     }
 
     // Applies bind changes to Hyprland, one process at a time.
@@ -225,6 +365,16 @@ Item {
         function disable(): void { root.setDrag(false) }
         function status(): string { return root.dragEnabled ? "enabled" : "disabled" }
         function reapply(): void { root.reapply() }
+        function preview(): void { root.previewMove() }
+        function dragstatus(): string {
+            return "moving=" + (root.moveAddress || "-")
+                + " active=" + root.moveActive
+                + " streak=" + root.moveStreak
+                + " tracked=" + Object.keys(root.moveRects).length
+                + " samples=" + root.moveSamples
+                + " rect=" + (root.moveRect ? JSON.stringify(root.moveRect) : "-")
+        }
+        function snapshot(): string { return JSON.stringify(root.moveRects) }
     }
 
     // ============================================================== overlays

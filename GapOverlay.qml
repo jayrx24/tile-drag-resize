@@ -29,6 +29,16 @@ PanelWindow {
     property string railsKey: ""
     property var liveRegions: []
 
+    // Rectangle (monitor-local) of the window currently being dragged with the
+    // middle button, or null. The service infers the drag from geometry alone;
+    // see the move-highlight section of Service.qml.
+    readonly property var moveFrame: {
+        var r = service ? service.moveRect : null;
+        if (!r || !service.moveActive) return null;
+        if (!monitor || service.moveMonitor !== monitor.name) return null;
+        return { x: r.x - monitor.x, y: r.y - monitor.y, w: r.w, h: r.h };
+    }
+
     // ---- lightbar colour state --------------------------------------------
     //
     // Every lit rail shares one wave phase so the whole bar scrolls together
@@ -48,7 +58,7 @@ PanelWindow {
         to: 1
         duration: overlay.wavePeriod
         loops: Animation.Infinite
-        running: overlay.litRails > 0
+        running: overlay.litRails > 0 || overlay.moveFrame !== null
     }
 
     // Colour of the lightbar at `along`, which runs 0..1 from one end of the
@@ -67,6 +77,14 @@ PanelWindow {
         var sat = Math.max(0.5, Math.min(1.0, base.hslSaturation));
         var lit = Math.max(0.55, Math.min(0.78, base.hslLightness + 0.05));
         return Qt.hsla(hue, sat, lit, alpha === undefined ? 1 : alpha);
+    }
+
+    // Colour at a point on the moving-window border. `p0` and `p1` are the
+    // perimeter fractions at the two ends of one edge and `t` runs 0..1 along
+    // it, so all four edges share one continuous ramp: the wave travels around
+    // the window instead of restarting in every corner.
+    function moveColor(p0, p1, t) {
+        return lightColor(p0 + (p1 - p0) * t, 0.95);
     }
 
     screen: modelData
@@ -106,6 +124,10 @@ PanelWindow {
     // make the lightbar stutter.
     function refreshRails() {
         if (anyDragging()) return;
+        // While a window is being dragged around, the layout underneath is in
+        // flux. Leave the rails alone so the gap lightbars do not flicker; the
+        // service refreshes them again once the drag settles.
+        if (service && service.moveActive) return;
         var next = service ? service.railsFor(monitor) : [];
         var key = JSON.stringify(next);
         if (key === railsKey) return;
@@ -294,6 +316,90 @@ PanelWindow {
                     if (overlay.service) overlay.service.refreshLayout();
                 }
                 onCanceled: rail.dragging = false
+            }
+        }
+    }
+
+    // A thin lightbar border around the tile being dragged with the middle
+    // button, in the same colours as the gap bars. The perimeter is walked
+    // clockwise from the top-left corner, so the four edges pick up one shared
+    // colour ramp and the wave flows around the window.
+    Item {
+        id: moveBorder
+
+        x: overlay.moveFrame ? overlay.moveFrame.x : 0
+        y: overlay.moveFrame ? overlay.moveFrame.y : 0
+        width: overlay.moveFrame ? overlay.moveFrame.w : 0
+        height: overlay.moveFrame ? overlay.moveFrame.h : 0
+        opacity: overlay.moveFrame ? 1 : 0
+        visible: opacity > 0.01
+        Behavior on opacity { NumberAnimation { duration: 110 } }
+
+        readonly property real thickness: 3
+        // Corner fractions: the top/bottom edges own `fx`, the sides own `fy`.
+        readonly property real perimeter: Math.max(1, 2 * width + 2 * height)
+        readonly property real fx: width / perimeter
+        readonly property real fy: height / perimeter
+
+        Rectangle {
+            x: 0
+            y: 0
+            width: parent.width
+            height: moveBorder.thickness
+            gradient: Gradient {
+                orientation: Gradient.Horizontal
+                GradientStop { position: 0.00; color: overlay.moveColor(0, moveBorder.fx, 0.00) }
+                GradientStop { position: 0.25; color: overlay.moveColor(0, moveBorder.fx, 0.25) }
+                GradientStop { position: 0.50; color: overlay.moveColor(0, moveBorder.fx, 0.50) }
+                GradientStop { position: 0.75; color: overlay.moveColor(0, moveBorder.fx, 0.75) }
+                GradientStop { position: 1.00; color: overlay.moveColor(0, moveBorder.fx, 1.00) }
+            }
+        }
+
+        Rectangle {
+            x: parent.width - moveBorder.thickness
+            y: 0
+            width: moveBorder.thickness
+            height: parent.height
+            gradient: Gradient {
+                orientation: Gradient.Vertical
+                GradientStop { position: 0.00; color: overlay.moveColor(moveBorder.fx, moveBorder.fx + moveBorder.fy, 0.00) }
+                GradientStop { position: 0.25; color: overlay.moveColor(moveBorder.fx, moveBorder.fx + moveBorder.fy, 0.25) }
+                GradientStop { position: 0.50; color: overlay.moveColor(moveBorder.fx, moveBorder.fx + moveBorder.fy, 0.50) }
+                GradientStop { position: 0.75; color: overlay.moveColor(moveBorder.fx, moveBorder.fx + moveBorder.fy, 0.75) }
+                GradientStop { position: 1.00; color: overlay.moveColor(moveBorder.fx, moveBorder.fx + moveBorder.fy, 1.00) }
+            }
+        }
+
+        // Reversed: the bottom edge runs right to left, the left edge bottom to
+        // top, so the ramp keeps advancing clockwise around the perimeter.
+        Rectangle {
+            x: 0
+            y: parent.height - moveBorder.thickness
+            width: parent.width
+            height: moveBorder.thickness
+            gradient: Gradient {
+                orientation: Gradient.Horizontal
+                GradientStop { position: 0.00; color: overlay.moveColor(2 * moveBorder.fx + moveBorder.fy, moveBorder.fx + moveBorder.fy, 0.00) }
+                GradientStop { position: 0.25; color: overlay.moveColor(2 * moveBorder.fx + moveBorder.fy, moveBorder.fx + moveBorder.fy, 0.25) }
+                GradientStop { position: 0.50; color: overlay.moveColor(2 * moveBorder.fx + moveBorder.fy, moveBorder.fx + moveBorder.fy, 0.50) }
+                GradientStop { position: 0.75; color: overlay.moveColor(2 * moveBorder.fx + moveBorder.fy, moveBorder.fx + moveBorder.fy, 0.75) }
+                GradientStop { position: 1.00; color: overlay.moveColor(2 * moveBorder.fx + moveBorder.fy, moveBorder.fx + moveBorder.fy, 1.00) }
+            }
+        }
+
+        Rectangle {
+            x: 0
+            y: 0
+            width: moveBorder.thickness
+            height: parent.height
+            gradient: Gradient {
+                orientation: Gradient.Vertical
+                GradientStop { position: 0.00; color: overlay.moveColor(1, 2 * moveBorder.fx + moveBorder.fy, 0.00) }
+                GradientStop { position: 0.25; color: overlay.moveColor(1, 2 * moveBorder.fx + moveBorder.fy, 0.25) }
+                GradientStop { position: 0.50; color: overlay.moveColor(1, 2 * moveBorder.fx + moveBorder.fy, 0.50) }
+                GradientStop { position: 0.75; color: overlay.moveColor(1, 2 * moveBorder.fx + moveBorder.fy, 0.75) }
+                GradientStop { position: 1.00; color: overlay.moveColor(1, 2 * moveBorder.fx + moveBorder.fy, 1.00) }
             }
         }
     }

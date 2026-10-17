@@ -26,14 +26,20 @@ function near(a, b, epsilon) {
 
 // Turn a raw Hyprland toplevel object (as exposed by the Quickshell Hyprland
 // module, either directly or through `lastIpcObject`) into a simple rectangle,
-// or null when the surface is not a tiled window we care about.
-function windowRect(toplevel) {
+// or null when the surface is not a window we care about.
+//
+// `options.allowFloating` keeps floating (and pinned) windows. The gap-rail
+// search never wants them, but the move highlight does: Hyprland can float a
+// window for the duration of a drag.
+function windowRect(toplevel, options) {
   var data = toplevel && toplevel.lastIpcObject ? toplevel.lastIpcObject : toplevel;
   if (!data) return null;
 
-  // Skip anything that is not a visible, tiled, ordinary window.
+  // Skip anything that is not a visible, ordinary window.
   if (data.mapped === false || data.hidden === true) return null;
-  if (data.floating === true || data.pinned === true) return null;
+  if (!options || !options.allowFloating) {
+    if (data.floating === true || data.pinned === true) return null;
+  }
   if (data.fullscreen && Number(data.fullscreen) !== 0) return null;
 
   var at = data.at || data.position;
@@ -301,6 +307,37 @@ function toArray(model) {
   return out;
 }
 
+// ---- move detection -------------------------------------------------------
+
+// Hyprland never announces "a window started being dragged", so the middle
+// button drag is inferred from geometry instead: a drag is a *pure
+// translation*, so a window that kept its size but changed position between two
+// samples is the one being moved. That also rules out the two things that must
+// not light up — a layout change moves windows once, and a gap resize changes
+// the size rather than just the position.
+//
+// `prev` and `next` are maps of address -> { x, y, w, h }. Returns the address
+// of the largest such move, or "" when there is none.
+function detectMove(prev, next, epsilon) {
+  var slop = Number(epsilon) > 0 ? Number(epsilon) : 2;
+  var best = "";
+  var bestDist = 0;
+  if (!prev || !next) return best;
+
+  for (var address in next) {
+    var a = next[address];
+    var b = prev[address];
+    if (!b) continue;
+    if (Math.abs(a.w - b.w) + Math.abs(a.h - b.h) > slop) continue;
+    var dist = Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+    if (dist > slop && dist > bestDist) {
+      bestDist = dist;
+      best = address;
+    }
+  }
+  return best;
+}
+
 // ---- public entry point ---------------------------------------------------
 
 // Compute the draggable gap rails for one monitor's active workspace.
@@ -354,7 +391,8 @@ var api = {
   windowRect: windowRect,
   findRails: findRails,
   mergeSeam: mergeSeam,
-  mergeRails: mergeRails
+  mergeRails: mergeRails,
+  detectMove: detectMove
 };
 
 if (typeof module !== "undefined" && module.exports) {
