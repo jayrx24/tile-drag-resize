@@ -31,29 +31,38 @@ PanelWindow {
 
     // ---- lightbar colour state --------------------------------------------
     //
-    // Every lit rail shares one drifting hue so the whole bar cycles colours
-    // together instead of each rail picking its own phase. `litRails` gates the
+    // Every lit rail shares one wave phase so the whole bar scrolls together
+    // instead of each rail picking its own timing. `litRails` gates the
     // animation: an idle shell does no per-frame colour work.
-    property real huePhase: 0
+    //
+    // One full colour cycle takes `wavePeriod`; lower is faster.
+    readonly property int wavePeriod: 3000
+
+    property real wavePhase: 0
     property int litRails: 0
 
     NumberAnimation {
         target: overlay
-        property: "huePhase"
+        property: "wavePhase"
         from: 0
         to: 1
-        duration: 16000
+        duration: overlay.wavePeriod
         loops: Animation.Infinite
         running: overlay.litRails > 0
     }
 
-    // A point on the lightbar's colour ramp: `along` runs 0..1 from one end of
-    // the bar to the other and `alpha` is baked in. The ramp starts at the
-    // theme accent, drifts with the shared phase, and spreads a little across
-    // the length so the bar is not a flat slab of one colour.
+    // Colour of the lightbar at `along`, which runs 0..1 from one end of the
+    // bar to the other; `alpha` is baked in.
+    //
+    // Sampling a periodic ramp that is *offset* by the wave phase is what makes
+    // the colours travel instead of shifting in place: a point of a given
+    // colour moves toward along = 1 as the phase advances, so a vertical split
+    // scrolls up/down and a horizontal split scrolls side to side.
     function lightColor(along, alpha) {
+        var u = along - overlay.wavePhase;
+        u = u - Math.floor(u);
         var base = Color.accent;
-        var hue = base.hslHue + overlay.huePhase + along * 0.12;
+        var hue = base.hslHue + u;
         hue = hue - Math.floor(hue);
         var sat = Math.max(0.5, Math.min(1.0, base.hslSaturation));
         var lit = Math.max(0.55, Math.min(0.78, base.hslLightness + 0.05));
@@ -211,15 +220,28 @@ PanelWindow {
                     }
                 }
 
-                // The bar proper: a colour ramp running from end to end.
+                // The bar proper: a scrolling colour ramp running from end to
+                // end. It is sampled at many stops because QML interpolates
+                // gradients in RGB, not in hue: adjacent stops have to stay
+                // within ~30 degrees of each other or the gaps between them
+                // read as muddy grey bands.
                 Rectangle {
                     anchors.fill: parent
                     radius: Math.min(width, height) / 2
                     gradient: Gradient {
                         orientation: rail.vertical ? Gradient.Vertical : Gradient.Horizontal
-                        GradientStop { position: 0.0; color: overlay.lightColor(0.0, 0.92) }
-                        GradientStop { position: 0.5; color: overlay.lightColor(0.5, 0.92) }
-                        GradientStop { position: 1.0; color: overlay.lightColor(1.0, 0.92) }
+                        GradientStop { position: 0.000; color: overlay.lightColor(0.000, 0.92) }
+                        GradientStop { position: 0.091; color: overlay.lightColor(0.091, 0.92) }
+                        GradientStop { position: 0.182; color: overlay.lightColor(0.182, 0.92) }
+                        GradientStop { position: 0.273; color: overlay.lightColor(0.273, 0.92) }
+                        GradientStop { position: 0.364; color: overlay.lightColor(0.364, 0.92) }
+                        GradientStop { position: 0.455; color: overlay.lightColor(0.455, 0.92) }
+                        GradientStop { position: 0.545; color: overlay.lightColor(0.545, 0.92) }
+                        GradientStop { position: 0.636; color: overlay.lightColor(0.636, 0.92) }
+                        GradientStop { position: 0.727; color: overlay.lightColor(0.727, 0.92) }
+                        GradientStop { position: 0.818; color: overlay.lightColor(0.818, 0.92) }
+                        GradientStop { position: 0.909; color: overlay.lightColor(0.909, 0.92) }
+                        GradientStop { position: 1.000; color: overlay.lightColor(1.000, 0.92) }
                     }
                 }
 
